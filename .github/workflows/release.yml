@@ -24,6 +24,12 @@ jobs:
         with:
           node-version: "18"
 
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.0-dev build-essential pkg-config
+
       - name: Install Wails CLI
         run: go install github.com/wailsapp/wails/v2/cmd/wails@latest
 
@@ -32,7 +38,7 @@ jobs:
         working-directory: ./frontend
 
       - name: Build application
-        run: wails build -nsis
+        run: wails build
 
       - name: Package application
         run: |
