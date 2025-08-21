@@ -1,16 +1,17 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import ReactQuill from 'react-quill';
-import 'react-quill/dist/quill.snow.css'; // Import Quill's CSS
+import 'react-quill/dist/quill.snow.css';
 import './App.css';
 import { CreateNote, GetNotes, GetNote, UpdateNote, DeleteNote } from "../wailsjs/go/main/App";
 import { main } from "../wailsjs/go/models";
+import ConfirmModal from './components/ConfirmModal';
 
 // Define the Note interface based on your Go struct
 interface Note extends main.Note {}
 
 // Custom useDebounce hook
 function useDebounce<T extends (...args: any[]) => any>(callback: T, delay: number) {
-  const timer = useRef<number | null>(null); // Use number for browser setTimeout ID
+  const timer = useRef<number | null>(null);
 
   useEffect(() => {
     return () => {
@@ -24,7 +25,7 @@ function useDebounce<T extends (...args: any[]) => any>(callback: T, delay: numb
     if (timer.current) {
       clearTimeout(timer.current);
     }
-    timer.current = window.setTimeout(() => { // Use window.setTimeout
+    timer.current = window.setTimeout(() => {
       callback(...args);
     }, delay);
   }, [callback, delay]);
@@ -38,7 +39,6 @@ function App() {
     const [editorContent, setEditorContent] = useState<string>('');
     const [noteTitle, setNoteTitle] = useState<string>('');
 
-    // State for context menu
     const [contextMenu, setContextMenu] = useState<{ 
         visible: boolean;
         x: number;
@@ -46,38 +46,42 @@ function App() {
         noteId: string | null;
     }>({ visible: false, x: 0, y: 0, noteId: null });
 
-    // Ref to track if it's the initial load/selection to prevent immediate auto-save
+    const [modalState, setModalState] = useState<{ 
+        isOpen: boolean;
+        noteId: string | null;
+        noteTitle: string;
+    }>({ isOpen: false, noteId: null, noteTitle: '' });
+
     const isInitialLoadRef = useRef(true);
 
-    // Load notes on startup
     useEffect(() => {
         loadNotes();
     }, []);
 
-    // Hide context menu on click outside
     useEffect(() => {
         const handleClickOutside = () => {
-            setContextMenu({ visible: false, x: 0, y: 0, noteId: null });
+            if (contextMenu.visible) {
+                setContextMenu({ visible: false, x: 0, y: 0, noteId: null });
+            }
         };
         document.addEventListener('click', handleClickOutside);
         return () => {
             document.removeEventListener('click', handleClickOutside);
         };
-    }, []);
-
+    }, [contextMenu.visible]);
 
     const loadNotes = async () => {
         try {
             const result = await GetNotes();
-            setNotes(result || []); // Ensure notes is always an array
+            setNotes(result || []);
         } catch (err) {
             console.error("Error loading notes:", err);
-            setNotes([]); // Set to empty array on error as well
+            setNotes([]);
         }
     };
 
     const handleNewNote = () => {
-        isInitialLoadRef.current = true; // Prevent auto-save on new note
+        isInitialLoadRef.current = true;
         setSelectedNote(null);
         setNoteTitle('');
         setEditorContent('');
@@ -85,154 +89,116 @@ function App() {
 
     const handleSelectNote = async (note: Note) => {
         try {
-            isInitialLoadRef.current = true; // Set flag BEFORE content changes
-            const fetchedNote = await GetNote(note.id); // Use note.id
+            isInitialLoadRef.current = true;
+            const fetchedNote = await GetNote(note.id);
             setSelectedNote(fetchedNote);
-            setNoteTitle(fetchedNote.title); // Use fetchedNote.title
-            setEditorContent(fetchedNote.content || ''); // Ensure content is always a string
+            setNoteTitle(fetchedNote.title);
+            setEditorContent(fetchedNote.content || '');
         } catch (err) {
             console.error("Error fetching note:", err);
         }
     };
 
-    // Auto-save logic using useDebounce hook
     const autoSaveNote = useDebounce(async (noteId: string | null, title: string, content: string) => {
         if (!title.trim()) {
             console.warn("Note title is empty. Auto-save skipped.");
             return;
         }
-
         try {
             if (noteId) {
-                // Update existing note
                 await UpdateNote(noteId, title, content);
-                console.log("Note auto-saved (updated):");
             } else {
-                // Create new note
                 const newNote = await CreateNote(title, content);
-                setSelectedNote(newNote); // Select the new note
-                console.log("Note auto-saved (created):");
+                setSelectedNote(newNote);
             }
-            await loadNotes(); // Refresh the notes list
+            await loadNotes();
         } catch (err) {
             console.error("Error during auto-save:", err);
         }
-    }, 1000); // Debounce by 1 second
+    }, 1000);
 
     useEffect(() => {
-        // Prevent auto-save on initial load/selection
         if (isInitialLoadRef.current) {
-            isInitialLoadRef.current = false; // Reset the flag
-            return; // And skip saving
+            isInitialLoadRef.current = false;
+            return;
         }
-
-        // Only auto-save if a note is selected or being created
         if (selectedNote || noteTitle.trim() || editorContent.trim()) {
             autoSaveNote(selectedNote?.id || null, noteTitle, editorContent);
         }
-    }, [noteTitle, editorContent]); // Dependencies trigger save only on content change
+    }, [noteTitle, editorContent]);
 
-    const handleDeleteNote = async (noteIdToDelete: string) => { // Modified to accept noteId
-        const noteToDelete = notes.find(n => n.id === noteIdToDelete);
-        if (noteToDelete && window.confirm(`Are you sure you want to delete "${noteToDelete.title}"?`)) {
-            try {
-                await DeleteNote(noteIdToDelete); // Use noteIdToDelete
-                if (selectedNote?.id === noteIdToDelete) {
-                    handleNewNote(); // Clear editor if the deleted note was selected
-                }
-                await loadNotes(); // Refresh the notes list
-            } catch (err) {
-                console.error("Error deleting note:", err);
-                alert("Failed to delete note.");
-            }
+    const triggerDeleteConfirmation = (noteId: string) => {
+        const note = notes.find(n => n.id === noteId);
+        if (note) {
+            setModalState({ isOpen: true, noteId: note.id, noteTitle: note.title });
         }
-        setContextMenu({ visible: false, x: 0, y: 0, noteId: null }); // Hide context menu
+        setContextMenu({ visible: false, x: 0, y: 0, noteId: null });
+    };
+
+    const executeDelete = async () => {
+        if (!modalState.noteId) return;
+        try {
+            await DeleteNote(modalState.noteId);
+            if (selectedNote?.id === modalState.noteId) {
+                handleNewNote();
+            }
+            await loadNotes();
+        } catch (err) {
+            console.error("Error deleting note:", err);
+            alert("Failed to delete note.");
+        } finally {
+            setModalState({ isOpen: false, noteId: null, noteTitle: '' });
+        }
     };
 
     const handleContextMenu = (event: React.MouseEvent, note: Note) => {
-        event.preventDefault(); // Prevent default browser context menu
-        setContextMenu({
-            visible: true,
-            x: event.clientX,
-            y: event.clientY,
-            noteId: note.id,
-        });
+        event.preventDefault();
+        setContextMenu({ visible: true, x: event.clientX, y: event.clientY, noteId: note.id });
     };
 
-    const modules = {
-        toolbar: [
-            [{ 'header': [1, 2, false] }],
-            ['bold', 'italic', 'underline', 'strike', 'blockquote'],
-            [{ 'list': 'ordered' }, { 'list': 'bullet' }, { 'indent': '-1' }, { 'indent': '+1' }],
-            ['link', 'image'],
-            ['clean']
-        ],
-    };
-
-    const formats = [
-        'header',
-        'bold', 'italic', 'underline', 'strike', 'blockquote',
-        'list', 'bullet', 'indent',
-        'link', 'image'
-    ];
+    const modules = { toolbar: [[{ 'header': [1, 2, false] }], ['bold', 'italic', 'underline', 'strike', 'blockquote'], [{ 'list': 'ordered' }, { 'list': 'bullet' }, { 'indent': '-1' }, { 'indent': '+1' }], ['link', 'image'], ['clean']] };
+    const formats = ['header', 'bold', 'italic', 'underline', 'strike', 'blockquote', 'list', 'bullet', 'indent', 'link', 'image'];
 
     return (
         <div id="App">
             <div className="sidebar">
                 <button className="new-note-btn" onClick={handleNewNote}>+ New Note</button>
                 <div className="note-list">
-                    {notes.length === 0 ? (
-                        <p className="no-notes-msg">No notes yet. Click "New Note" to create one!</p>
-                    ) : (
-                        notes.map((note) => (
-                            note ? (
-                                <div
-                                    key={note.id}
-                                    className={`note-list-item ${selectedNote?.id === note.id ? 'selected' : ''}`}
-                                    onClick={() => handleSelectNote(note)}
-                                    onContextMenu={(e) => handleContextMenu(e, note)} // Add context menu handler
-                                >
-                                    {note.title || "Untitled"}
-                                </div>
-                            ) : null
-                        ))
-                    )}
+                    {notes.map((note) => (
+                        note && (
+                            <div
+                                key={note.id}
+                                className={`note-list-item ${selectedNote?.id === note.id ? 'selected' : ''}`}
+                                onClick={() => handleSelectNote(note)}
+                                onContextMenu={(e) => handleContextMenu(e, note)}
+                            >
+                                {note.title || "Untitled"}
+                            </div>
+                        )
+                    ))}
                 </div>
             </div>
             <div className="main-content">
-                <input
-                    type="text"
-                    className="note-title-input"
-                    placeholder="Note Title"
-                    value={noteTitle}
-                    onChange={(e) => setNoteTitle(e.target.value)}
-                />
-                <ReactQuill
-                    theme="snow"
-                    value={editorContent}
-                    onChange={setEditorContent}
-                    modules={modules}
-                    formats={formats}
-                    className="quill-editor"
-                />
-                <div className="actions">
-                    {/* Delete button moved to context menu */}
-                </div>
+                <input type="text" className="note-title-input" placeholder="Note Title" value={noteTitle} onChange={(e) => setNoteTitle(e.target.value)} />
+                <ReactQuill theme="snow" value={editorContent} onChange={setEditorContent} modules={modules} formats={formats} className="quill-editor" />
             </div>
 
             {contextMenu.visible && (
-                <div
-                    className="context-menu"
-                    style={{ top: contextMenu.y, left: contextMenu.x }}
-                >
-                    <div
-                        className="context-menu-item"
-                        onClick={() => contextMenu.noteId && handleDeleteNote(contextMenu.noteId)}
-                    >
+                <div className="context-menu" style={{ top: contextMenu.y, left: contextMenu.x }}>
+                    <div className="context-menu-item" onClick={() => contextMenu.noteId && triggerDeleteConfirmation(contextMenu.noteId)}>
                         Delete
                     </div>
                 </div>
             )}
+
+            <ConfirmModal
+                isOpen={modalState.isOpen}
+                onClose={() => setModalState({ isOpen: false, noteId: null, noteTitle: '' })}
+                onConfirm={executeDelete}
+                title="删除笔记"
+            >
+                <p>你确定要删除笔记 "{modalState.noteTitle}" 吗？</p>
+            </ConfirmModal>
         </div>
     );
 }
