@@ -39,7 +39,7 @@ function App() {
     const [noteTitle, setNoteTitle] = useState<string>('');
 
     // State for context menu
-    const [contextMenu, setContextMenu] = useState<{
+    const [contextMenu, setContextMenu] = useState<{ 
         visible: boolean;
         x: number;
         y: number;
@@ -53,15 +53,6 @@ function App() {
     useEffect(() => {
         loadNotes();
     }, []);
-
-    // Reset isInitialLoadRef when selectedNote changes
-    useEffect(() => {
-        isInitialLoadRef.current = true;
-        const timer = setTimeout(() => {
-            isInitialLoadRef.current = false;
-        }, 500); // Small delay to allow state to settle
-        return () => clearTimeout(timer);
-    }, [selectedNote]);
 
     // Hide context menu on click outside
     useEffect(() => {
@@ -86,6 +77,7 @@ function App() {
     };
 
     const handleNewNote = () => {
+        isInitialLoadRef.current = true; // Prevent auto-save on new note
         setSelectedNote(null);
         setNoteTitle('');
         setEditorContent('');
@@ -93,6 +85,7 @@ function App() {
 
     const handleSelectNote = async (note: Note) => {
         try {
+            isInitialLoadRef.current = true; // Set flag BEFORE content changes
             const fetchedNote = await GetNote(note.id); // Use note.id
             setSelectedNote(fetchedNote);
             setNoteTitle(fetchedNote.title); // Use fetchedNote.title
@@ -117,7 +110,7 @@ function App() {
             } else {
                 // Create new note
                 const newNote = await CreateNote(title, content);
-                setSelectedNote(newNote);
+                setSelectedNote(newNote); // Select the new note
                 console.log("Note auto-saved (created):");
             }
             await loadNotes(); // Refresh the notes list
@@ -129,14 +122,15 @@ function App() {
     useEffect(() => {
         // Prevent auto-save on initial load/selection
         if (isInitialLoadRef.current) {
-            return;
+            isInitialLoadRef.current = false; // Reset the flag
+            return; // And skip saving
         }
 
-        // Only auto-save if a note is selected or being created (selectedNote is null but title/content exist)
+        // Only auto-save if a note is selected or being created
         if (selectedNote || noteTitle.trim() || editorContent.trim()) {
             autoSaveNote(selectedNote?.id || null, noteTitle, editorContent);
         }
-    }, [noteTitle, editorContent, selectedNote, autoSaveNote]); // autoSaveNote is now stable due to useCallback
+    }, [noteTitle, editorContent]); // Dependencies trigger save only on content change
 
     const handleDeleteNote = async (noteIdToDelete: string) => { // Modified to accept noteId
         const noteToDelete = notes.find(n => n.id === noteIdToDelete);
